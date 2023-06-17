@@ -1,6 +1,6 @@
 """Fault currents.
 
-This program calculates the current sequences for
+This program calculates the short circuit current sequences for
 the following kind of faults:
 
     1. Single Line-to-Ground
@@ -197,9 +197,9 @@ class System:
         Vb_new_C = [v.Vnom_kV for v in self.conductors]
 
         # New voltages in generators
-        def turn_down(ratio: list) -> list:
+        def step_down(ratio: list) -> list:
             return ratio * Vb_2
-        Vb_new_G = list(map(turn_down, a))
+        Vb_new_G = list(map(step_down, a))
 
         # Get original Sb of divices
         Sb_old_G = [g.Snom_MVA for g in self.generators]
@@ -289,7 +289,7 @@ class System:
         self.lines.append(line)
         return line
 
-    # Admitance matrix
+    # Admitance matrix positive and negative sequence.
     def build_Y(self) -> None:
         """Admitance matrix.
 
@@ -312,10 +312,21 @@ class System:
             self.Y[m, n] -= Y_serie
             self.Y[n, m] -= Y_serie
 
-# Positive sequence:
-# ------------------
+    # Admitance matrix zero sequence.
+    def build_Y0(self) -> None:
+        """Admitance matrix.
 
-def main():
+        Matrix Y0 come to become a attribute of the ``System`` class.
+        """
+
+def main() -> System:
+    """System data and objects.
+
+    It gets the data of the system, based on that information
+    it sets the instances as well as their attibutes and
+    convert everything to a common base in p.u.
+    """
+
     # Get data of the system
     dataSet = sysData()
     directory = './data/System_data.xlsx'
@@ -332,17 +343,28 @@ def main():
     sys.add_generators(generator_data)
     sys.add_transformers(tx_data)
     sys.add_conductors(line_data)
+    # To common base
     sys.set_pu(1000, 765)
+    return sys
+
+def main01(sys: System) -> System:
+    """Run positive sequence.
+
+    It creates the positive sequence network of a 
+    particular system.
+    """
 
     # Get reactance
     X1_Gs = [x.Xdpp_pu for x in sys.generators]
     X1cc_Ts = [x.Xcc_pu for x in sys.transformers]
     X1_C = [x.X1_pu for x in sys.conductors]
+
     # To susceptance
     def to_B(X):
-        return - 1 / X
+        return -1 / X
+
     B1_Gs = list(map(to_B, X1_Gs))
-    # Buses
+    # Creat buses with compensators (generators)
     b1 = sys.add_PV(B1_Gs[0])
     b2 = sys.add_PV(B1_Gs[1])
     b3 = sys.add_PV(B1_Gs[2])
@@ -350,7 +372,7 @@ def main():
     b5 = sys.add_PQ(B=0)
     b6 = sys.add_PQ(B=0)
     b7 = sys.add_PQ(B=0)
-    # Lines
+    # Conductors and transformer as lines
     L1 = sys.add_line(b1, b5, X1cc_Ts[0])    # T1
     L2 = sys.add_line(b2, b6, X1cc_Ts[1])    # T2
     L3 = sys.add_line(b3, b7, X1cc_Ts[2])    # T3
@@ -363,8 +385,33 @@ def main():
     sys.build_Y()
     return sys
 
+def main02(sys: System) -> System:
+    """Run negative sequence.
+
+    It creates the negative sequence network of a 
+    particular system.
+    """
+
+    # Get reactance
+    X2_Gs = [x.X2_pu for x in sys.generators]
+    pass
+
+def main00(sys: System) -> System:
+    """Run zero sequence.
+
+    It creates the zero sequence network of a 
+    particular system.
+    """
+
+    # Get reactance
+    X0_Gs = [x.X0_pu for x in sys.generators]
+    X0_C = [x.X0_pu for x in sys.conductors]
+    pass
+
+
 if __name__ == '__main__':
     sys = main()
+    sys = main01(sys)
     # Show all objects of the system:
     print('\n ** Generator **')
     for g in sys.generators:
