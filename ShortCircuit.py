@@ -336,7 +336,7 @@ class System:
                 if g.Conn == 'Yg':
                     b.B += -1/1e-6
                 elif g.Conn == 'Yn':
-                    b.B += -1/g.Xg_pu
+                    b.B += -1 / (3*g.Xg_pu)
                 elif g.Conn == 'Y':
                     b.B += -1/g.Xg_pu
 
