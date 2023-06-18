@@ -100,13 +100,15 @@ class Line:
                  R_pu: float,
                  X_pu: float,
                  from_Y: complex,
-                 to_Y: complex):
+                 to_Y: complex,
+                 Tx: bool = False):
         self.from_bus = from_bus
         self.to_bus = to_bus
         self.R_pu = R_pu
         self.X_pu = X_pu
         self.from_Y = from_Y   # Half shunt
         self.to_Y = to_Y       # Other half shunt
+        self.Tx = Tx           # See as transformer
 
 class System:
     r"""Network.
@@ -283,41 +285,100 @@ class System:
 
     # Model pi
     def add_line(self, from_bus, to_bus, X_pu, R_pu = 0,
-                 total_G: float = 0, total_B: float = 0) -> Line:
+                 total_G: float = 0, total_B: float = 0, Tx: bool = False) -> Line:
         total_Y = total_G + 1j*total_B
-        line = Line(from_bus, to_bus, R_pu, X_pu, total_Y/2, total_Y/2)
+        line = Line(from_bus, to_bus, R_pu, X_pu, total_Y/2, total_Y/2, Tx)
         self.lines.append(line)
         return line
 
-    # Admitance matrix positive and negative sequence.
-    def build_Y(self) -> None:
-        """Admitance matrix.
+    def build_Y(self, zero: False) -> None:
+        """Admitance matrix of any sequence network.
 
         Matrix Y come to become a attribute of the ``System`` class.
         """
-        N = len(self.buses)
-        self.Y = np.zeros((N, N), dtype=complex)
-        # Due to compensations to a single bar
-        for (i, bus) in enumerate(self.buses):
-            self.Y[i, i] += bus.G + 1j*bus.B
-        # Due to Lines
-        for line in self.lines:
-            m = self.buses.index(line.from_bus)
-            n = self.buses.index(line.to_bus)
-            # Get series admitance of the line
-            Y_serie = (1) / (line.R_pu + 1j*line.X_pu)
-            # Build Y
-            self.Y[m, m] += line.from_Y + Y_serie
-            self.Y[n, n] += line.to_Y + Y_serie
-            self.Y[m, n] -= Y_serie
-            self.Y[n, m] -= Y_serie
+        # Get SC reactance of transformers
+        if zero:
+            # Transformers
+            Lx = [t for t in self.lines if t.Tx]
+            for L, T in zip(Lx, self.transformers):
+                b0_from = self.add_PV(-1/1e6)
+                b0_to = self.add_PV(-1/1e6)
+                if L.Tx:
+                    b_to = L.to_bus  # Save old toward
+                    self.add_line(b0_from, b0_to, T.Xcc_pu)
+                    # Update toward
+                    L.to_bus = b0_from
+                    # Primary
+                    if T.Conn1 == 'D':
+                        L.X_pu = 1e6
+                        b0_from.B = -1/1e-6
+                    elif T.Conn1 == 'Yg':
+                        L.X_pu = 1e-6
+                    elif T.Conn1 == 'Yn':
+                        # No data
+                        L.X_pu = 3 * 0.05
+                    elif T.Conn1 == 'Y':
+                        L.X_pu = 1e6
 
-    # Admitance matrix zero sequence.
-    def build_Y0(self) -> None:
-        """Admitance matrix.
+                    # Secondary
+                    if T.Conn2 == 'D':
+                        self.add_line(b0_to, b_to, 1e6)
+                        b0_to.B = -1/1e-6
+                    elif T.Conn2 == 'Yg':
+                        self.add_line(b0_to, b_to, 1e-6)
+                    elif T.Conn2 == 'Yn':
+                        # No data
+                        self.add_line(b0_to, b_to, 3*0.5)
+                    elif T.Conn2 == 'Y':
+                        self.add_line(b0_to, b_to, 1e6)
 
-        Matrix Y0 come to become a attribute of the ``System`` class.
-        """
+            # Generators
+            # Get connection
+            # Get 
+            for g in self.generators:
+                if g.Conn == 'Yg':
+                    pass
+                elif g.Conn == 'Yn':
+                    pass
+                elif g.Conn == 'Y':
+                    pass
+
+
+            N = len(self.buses)
+            self.Y = np.zeros((N, N), dtype=complex)
+            # Due to compensations to a single bar
+            for (i, bus) in enumerate(self.buses):
+                self.Y[i, i] += bus.G + 1j*bus.B
+            # Due to Lines
+            for line in self.lines:
+                m = self.buses.index(line.from_bus)
+                n = self.buses.index(line.to_bus)
+                # Get series admitance of the line
+                Y_serie = (1) / (line.R_pu + 1j*line.X_pu)
+                # Build Y
+                self.Y[m, m] += line.from_Y + Y_serie
+                self.Y[n, n] += line.to_Y + Y_serie
+                self.Y[m, n] -= Y_serie
+                self.Y[n, m] -= Y_serie
+
+        else:
+            N = len(self.buses)
+            self.Y = np.zeros((N, N), dtype=complex)
+            # Due to compensations to a single bar
+            for (i, bus) in enumerate(self.buses):
+                self.Y[i, i] += bus.G + 1j*bus.B
+            # Due to Lines
+            for line in self.lines:
+                m = self.buses.index(line.from_bus)
+                n = self.buses.index(line.to_bus)
+                # Get series admitance of the line
+                Y_serie = (1) / (line.R_pu + 1j*line.X_pu)
+                # Build Y
+                self.Y[m, m] += line.from_Y + Y_serie
+                self.Y[n, n] += line.to_Y + Y_serie
+                self.Y[m, n] -= Y_serie
+                self.Y[n, m] -= Y_serie
+
 
 def main() -> System:
     """System data and objects.
@@ -369,14 +430,15 @@ def main01(sys: System) -> System:
     b2 = sys.add_PV(B1_Gs[1])
     b3 = sys.add_PV(B1_Gs[2])
     b4 = sys.add_PV(B1_Gs[3])
+    # Load buses
     b5 = sys.add_PQ(B=0)
     b6 = sys.add_PQ(B=0)
     b7 = sys.add_PQ(B=0)
-    # Conductors and transformer as lines
-    L1 = sys.add_line(b1, b5, X1cc_Ts[0])    # T1
-    L2 = sys.add_line(b2, b6, X1cc_Ts[1])    # T2
-    L3 = sys.add_line(b3, b7, X1cc_Ts[2])    # T3
-    L4 = sys.add_line(b4, b7, X1cc_Ts[3])    # T4
+    # Transformers and conductors
+    T1 = sys.add_line(b1, b5, X1cc_Ts[0], Tx=True)
+    T2 = sys.add_line(b2, b6, X1cc_Ts[1], Tx=True)
+    T3 = sys.add_line(b3, b7, X1cc_Ts[2], Tx=True)
+    T4 = sys.add_line(b4, b7, X1cc_Ts[3], Tx=True)
     L56 = sys.add_line(b5, b6, X1_C[0])
     L57 = sys.add_line(b5, b7, X1_C[1])
     L67 = sys.add_line(b6, b7, X1_C[2])
@@ -405,23 +467,55 @@ def main00(sys: System) -> System:
 
     # Get reactance
     X0_Gs = [x.X0_pu for x in sys.generators]
+    X0cc_Ts = [x.Xcc_pu for x in sys.transformers]
     X0_C = [x.X0_pu for x in sys.conductors]
-    pass
 
+    # To susceptance
+    def to_B(X):
+        return -1 / X
+
+    B1_Gs = list(map(to_B, X0_Gs))
+    # Creat buses with compensators (generators)
+    b1 = sys.add_PV(B1_Gs[0])
+    b2 = sys.add_PV(B1_Gs[1])
+    b3 = sys.add_PV(B1_Gs[2])
+    b4 = sys.add_PV(B1_Gs[3])
+    # Load buses
+    b5 = sys.add_PQ(B=0)
+    b6 = sys.add_PQ(B=0)
+    b7 = sys.add_PQ(B=0)
+    # Transformers and conductors
+    T1 = sys.add_line(b1, b5, X0cc_Ts[0], Tx=True)
+    T2 = sys.add_line(b2, b6, X0cc_Ts[1], Tx=True)
+    T3 = sys.add_line(b3, b7, X0cc_Ts[2], Tx=True)
+    T4 = sys.add_line(b4, b7, X0cc_Ts[3], Tx=True)
+    L56 = sys.add_line(b5, b6, X0_C[0])
+    L57 = sys.add_line(b5, b7, X0_C[1])
+    L67 = sys.add_line(b6, b7, X0_C[2])
+
+    # Get admitance zero sequence:
+    sys.build_Y(zero=True)
+    return sys
 
 if __name__ == '__main__':
-    sys = main()
-    sys = main01(sys)
+    sys = main()       # Get system
     # Show all objects of the system:
     print('\n ** Generator **')
     for g in sys.generators:
         print(g.__dict__)
+
     print('\n ** Transformer **')
     for t in sys.transformers:
         print(t.__dict__)
+
     print('\n ** Conductor **')
     for c in sys.conductors:
         print(c.__dict__)
 
-    # Show admitance matrix
-    print(sys.Y)
+    # sys = main01(sys)    # Try (+) sequences
+    # sys = main02(sys)    # Try (-) sequences
+    # # Show admitance matrix
+    # print(sys.Y)
+    # sys = main00(sys)    # Try zero sequences
+    # # Show new admitance matrix
+    # print(sys.Y)
