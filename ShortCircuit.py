@@ -291,59 +291,56 @@ class System:
         self.lines.append(line)
         return line
 
-    def build_Y(self, zero: False) -> None:
+    def build_Y(self, zero: bool = False) -> None:
         """Admitance matrix of any sequence network.
 
         Matrix Y come to become a attribute of the ``System`` class.
         """
-        # Get SC reactance of transformers
         if zero:
             # Transformers
             Lx = [t for t in self.lines if t.Tx]
-            for L, T in zip(Lx, self.transformers):
-                b0_from = self.add_PV(-1/1e6)
-                b0_to = self.add_PV(-1/1e6)
-                if L.Tx:
-                    b_to = L.to_bus  # Save old toward
-                    self.add_line(b0_from, b0_to, T.Xcc_pu)
-                    # Update toward
-                    L.to_bus = b0_from
-                    # Primary
-                    if T.Conn1 == 'D':
-                        L.X_pu = 1e6
-                        b0_from.B = -1/1e-6
-                    elif T.Conn1 == 'Yg':
-                        L.X_pu = 1e-6
-                    elif T.Conn1 == 'Yn':
-                        # No data
-                        L.X_pu = 3 * 0.05
-                    elif T.Conn1 == 'Y':
-                        L.X_pu = 1e6
 
-                    # Secondary
-                    if T.Conn2 == 'D':
-                        self.add_line(b0_to, b_to, 1e6)
-                        b0_to.B = -1/1e-6
-                    elif T.Conn2 == 'Yg':
-                        self.add_line(b0_to, b_to, 1e-6)
-                    elif T.Conn2 == 'Yn':
-                        # No data
-                        self.add_line(b0_to, b_to, 3*0.5)
-                    elif T.Conn2 == 'Y':
-                        self.add_line(b0_to, b_to, 1e6)
+            for L, T in zip(Lx, self.transformers):
+                b0_from = self.add_PQ(-1/1e6)    # Aux. load bus from
+                b0_to = self.add_PQ(-1/1e6)      # Aux. load bus to
+                b_to = L.to_bus  # Save old toward
+                self.add_line(b0_from, b0_to, T.Xcc_pu)
+                # Update toward
+                L.to_bus = b0_from
+                # Primary
+                if T.Conn1 == 'D':
+                    L.X_pu = 1e6
+                    b0_from.B = -1/1e-6
+                elif T.Conn1 == 'Yg':
+                    L.X_pu = 1e-6
+                elif T.Conn1 == 'Yn':
+                    # No data
+                    L.X_pu = 3 * 0.05
+                elif T.Conn1 == 'Y':
+                    L.X_pu = 1e6
+
+                # Secondary
+                if T.Conn2 == 'D':
+                    self.add_line(b0_to, b_to, 1e6)
+                    b0_to.B = -1/1e-6
+                elif T.Conn2 == 'Yg':
+                    self.add_line(b0_to, b_to, 1e-6)
+                elif T.Conn2 == 'Yn':
+                    # No data
+                    self.add_line(b0_to, b_to, 3*0.5)
+                elif T.Conn2 == 'Y':
+                    self.add_line(b0_to, b_to, 1e6)
 
             # Generators
-            # Get connection
-            # Get 
-            for g in self.generators:
+            for b, g in zip(self.PV_buses, self.generators):
                 if g.Conn == 'Yg':
-                    pass
+                    b.B += -1/1e-6
                 elif g.Conn == 'Yn':
-                    pass
+                    b.B += -1/g.Xg_pu
                 elif g.Conn == 'Y':
-                    pass
+                    b.B += -1/g.Xg_pu
 
-
+            # Creat Y zero sequence matrix
             N = len(self.buses)
             self.Y = np.zeros((N, N), dtype=complex)
             # Due to compensations to a single bar
@@ -414,6 +411,13 @@ def main01(sys: System) -> System:
     It creates the positive sequence network of a 
     particular system.
     """
+    # Initialize
+    sys.slack = None
+    sys.buses = []
+    sys.non_slack_buses = []
+    sys.PQ_buses = []
+    sys.PV_buses = []
+    sys.lines = []
 
     # Get reactance
     X1_Gs = [x.Xdpp_pu for x in sys.generators]
@@ -453,10 +457,45 @@ def main02(sys: System) -> System:
     It creates the negative sequence network of a 
     particular system.
     """
+    # Initialize
+    sys.slack = None
+    sys.buses = []
+    sys.non_slack_buses = []
+    sys.PQ_buses = []
+    sys.PV_buses = []
+    sys.lines = []
 
     # Get reactance
     X2_Gs = [x.X2_pu for x in sys.generators]
-    pass
+    X2cc_Ts = [x.Xcc_pu for x in sys.transformers]
+    X2_C = [x.X2_pu for x in sys.conductors]
+
+    # To susceptance
+    def to_B(X):
+        return -1 / X
+
+    B2_Gs = list(map(to_B, X2_Gs))
+    # Creat buses with compensators (generators)
+    b1 = sys.add_PV(B2_Gs[0])
+    b2 = sys.add_PV(B2_Gs[1])
+    b3 = sys.add_PV(B2_Gs[2])
+    b4 = sys.add_PV(B2_Gs[3])
+    # Load buses
+    b5 = sys.add_PQ(B=0)
+    b6 = sys.add_PQ(B=0)
+    b7 = sys.add_PQ(B=0)
+    # Transformers and conductors
+    T1 = sys.add_line(b1, b5, X2cc_Ts[0], Tx=True)
+    T2 = sys.add_line(b2, b6, X2cc_Ts[1], Tx=True)
+    T3 = sys.add_line(b3, b7, X2cc_Ts[2], Tx=True)
+    T4 = sys.add_line(b4, b7, X2cc_Ts[3], Tx=True)
+    L56 = sys.add_line(b5, b6, X2_C[0])
+    L57 = sys.add_line(b5, b7, X2_C[1])
+    L67 = sys.add_line(b6, b7, X2_C[2])
+
+    # Get admitance negative sequence:
+    sys.build_Y()
+    return sys
 
 def main00(sys: System) -> System:
     """Run zero sequence.
@@ -464,6 +503,13 @@ def main00(sys: System) -> System:
     It creates the zero sequence network of a 
     particular system.
     """
+    # Initialize
+    sys.slack = None
+    sys.buses = []
+    sys.non_slack_buses = []
+    sys.PQ_buses = []
+    sys.PV_buses = []
+    sys.lines = []
 
     # Get reactance
     X0_Gs = [x.X0_pu for x in sys.generators]
@@ -512,10 +558,12 @@ if __name__ == '__main__':
     for c in sys.conductors:
         print(c.__dict__)
 
-    # sys = main01(sys)    # Try (+) sequences
-    # sys = main02(sys)    # Try (-) sequences
-    # # Show admitance matrix
-    # print(sys.Y)
-    # sys = main00(sys)    # Try zero sequences
-    # # Show new admitance matrix
-    # print(sys.Y)
+    print('\n ** Positve Seq. ** \n')
+    sys = main01(sys)
+    print(sys.Y)
+    print('\n ** Negative Seq. ** \n')
+    sys = main02(sys)
+    print(sys.Y)
+    sys = main00(sys)
+    print('\n ** Zero Seq. ** \n')
+    print(sys.Y)
