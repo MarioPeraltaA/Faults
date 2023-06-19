@@ -176,6 +176,7 @@ class System:
         Z0pu_old_G = [g.X0_pu for g in self.generators]
         Z1pu_old_G = [g.Xdpp_pu for g in self.generators]
         Z2pu_old_G = [g.X2_pu for g in self.generators]
+        Xgpu_old_G = [g.Xg_pu for g in self.generators]     # Due to connection.
 
         # Original impedance: Transformers pu
         Zccpu_old_T =  [t.Xcc_pu for t in self.transformers]
@@ -218,6 +219,7 @@ class System:
         Z0pu_new_G = list(map(X_to_newpu, Z0pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
         Z1pu_new_G = list(map(X_to_newpu, Z1pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
         Z2pu_new_G = list(map(X_to_newpu, Z2pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
+        Xgpu_old_G = list(map(X_to_newpu, Xgpu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
         Zccpu_new_T = list(map(X_to_newpu, Zccpu_old_T, Sb_old_T, LV_old, LV_old))
         X0_pu_C = list(map(Xpu_lines, Zohm0_old_C, Vb_new_C))
         X1_pu_C = list(map(Xpu_lines, Zohm1_old_C, Vb_new_C))
@@ -229,6 +231,8 @@ class System:
             G.Xdpp_pu = Xnew_pu
         for G, Xnew_pu in zip(self.generators, Z2pu_new_G):
             G.X2_pu = Xnew_pu
+        for G, Xgnew_pu in zip(self.generators, Xgpu_old_G):
+            G.Xg_pu = Xgnew_pu
         for T, Xnew_pu in zip(self.transformers, Zccpu_new_T):
             T.Xcc_pu = Xnew_pu
         for C, Xnew_pu in zip(self.conductors, X0_pu_C):
