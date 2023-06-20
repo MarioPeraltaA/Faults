@@ -12,6 +12,9 @@ Author: Mario R. Peralta A.
 Electric Power and Energy Research Laboratory (EPERLab).
 
 """
+import numpy as np
+
+
 class sysData:
     def __init__(self):
         self.generators = {}
@@ -22,7 +25,7 @@ class sysData:
         import pandas as pd
         # Read data
         df = pd.read_excel(path,
-                        sheet_name=None)
+                           sheet_name=None)
         # List of all sheets
         sheets = list(df.keys())
 
@@ -47,8 +50,10 @@ class sysData:
                     # Update attribute
                     self.lines[c] = cols
 
+
 class Generator:
     pass
+
 
 class Transformer:
     pass
@@ -63,7 +68,6 @@ class Conductor:
         self.X1_pu = None
         self.X2_pu = self.X1_pu
 
-import numpy as np
 
 class Bus:
 
@@ -88,6 +92,7 @@ class Bus:
     def get_phasor(self) -> complex:
         return self.V * np.exp(1j*self.theta)
 
+
 class Line:
     """Gegenal type of conductors.
 
@@ -109,6 +114,7 @@ class Line:
         self.from_Y = from_Y   # Half shunt
         self.to_Y = to_Y       # Other half shunt
         self.Tx = Tx           # See as transformer
+
 
 class System:
     r"""Network.
@@ -176,10 +182,11 @@ class System:
         Z0pu_old_G = [g.X0_pu for g in self.generators]
         Z1pu_old_G = [g.Xdpp_pu for g in self.generators]
         Z2pu_old_G = [g.X2_pu for g in self.generators]
-        Xgpu_old_G = [g.Xg_pu for g in self.generators]     # Due to connection.
+        # Due to connection.
+        Xgpu_old_G = [g.Xg_pu for g in self.generators]
 
         # Original impedance: Transformers pu
-        Zccpu_old_T =  [t.Xcc_pu for t in self.transformers]
+        Zccpu_old_T = [t.Xcc_pu for t in self.transformers]
 
         # Original impedance: Conductors Ohm
         Zohm0_old_C = [c.X0_ohm for c in self.conductors]
@@ -216,11 +223,31 @@ class System:
             return Xb_old / Zb
 
         # Get new impedance in common base
-        Z0pu_new_G = list(map(X_to_newpu, Z0pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
-        Z1pu_new_G = list(map(X_to_newpu, Z1pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
-        Z2pu_new_G = list(map(X_to_newpu, Z2pu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
-        Xgpu_old_G = list(map(X_to_newpu, Xgpu_old_G, Sb_old_G, Vb_old_G, Vb_new_G))
-        Zccpu_new_T = list(map(X_to_newpu, Zccpu_old_T, Sb_old_T, LV_old, LV_old))
+        Z0pu_new_G = list(map(X_to_newpu,
+                              Z0pu_old_G,
+                              Sb_old_G,
+                              Vb_old_G,
+                              Vb_new_G))
+        Z1pu_new_G = list(map(X_to_newpu,
+                              Z1pu_old_G,
+                              Sb_old_G,
+                              Vb_old_G,
+                              Vb_new_G))
+        Z2pu_new_G = list(map(X_to_newpu,
+                              Z2pu_old_G,
+                              Sb_old_G,
+                              Vb_old_G,
+                              Vb_new_G))
+        Xgpu_old_G = list(map(X_to_newpu,
+                              Xgpu_old_G,
+                              Sb_old_G,
+                              Vb_old_G,
+                              Vb_new_G))
+        Zccpu_new_T = list(map(X_to_newpu,
+                               Zccpu_old_T,
+                               Sb_old_T,
+                               LV_old,
+                               LV_old))
         X0_pu_C = list(map(Xpu_lines, Zohm0_old_C, Vb_new_C))
         X1_pu_C = list(map(Xpu_lines, Zohm1_old_C, Vb_new_C))
 
@@ -264,32 +291,34 @@ class System:
         It sets buses in this order: [slack, PV, PQ].
         """
         self.non_slack_buses = self.PV_buses + self.PQ_buses
-        if self.slack != None:
+        if self.slack is not None:
             self.buses = [self.slack] + self.non_slack_buses
         else:
             self.buses = self.non_slack_buses
 
     # Reference
-    def add_slack(self, V, Vb, deg = 0, PL = 0, QL = 0, G = 0, B = 0) -> Bus:
+    def add_slack(self, V, Vb, deg=0, PL=0, QL=0, G=0, B=0) -> Bus:
         bus = Bus(V, deg, PL, QL, G, B, Vb, 'Slack')
         self.store_bus(bus)
         return bus
 
     # Load
-    def add_PQ(self, B, G = 0, V = None, deg = 0, PL = None, QL = None, Vb = None) -> Bus:
+    def add_PQ(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None) -> Bus:
         bus = Bus(V, deg, PL, QL, G, B, Vb, 'PQ')
         self.store_bus(bus)
         return bus
 
     # Injectors
-    def add_PV(self, B, G = 0, V = None, deg = 0, PL = None, QL = None, Vb = None) -> Bus:
+    def add_PV(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None) -> Bus:
         bus = Bus(V, deg, PL, QL, G, B, Vb, 'PV')
         self.store_bus(bus)
         return bus
 
     # Model pi
-    def add_line(self, from_bus, to_bus, X_pu, R_pu = 0,
-                 total_G: float = 0, total_B: float = 0, Tx: bool = False) -> Line:
+    def add_line(self, from_bus, to_bus, X_pu, R_pu=0,
+                 total_G: float = 0,
+                 total_B: float = 0,
+                 Tx: bool = False) -> Line:
         total_Y = total_G + 1j*total_B
         line = Line(from_bus, to_bus, R_pu, X_pu, total_Y/2, total_Y/2, Tx)
         self.lines.append(line)
@@ -409,10 +438,11 @@ def main() -> System:
     sys.set_pu(1000, 765)
     return sys
 
+
 def main01(sys: System) -> System:
     """Run positive sequence.
 
-    It creates the positive sequence network of a 
+    It creates the positive sequence network of a
     particular system.
     """
     # Initialize
@@ -455,10 +485,11 @@ def main01(sys: System) -> System:
     sys.build_Y()
     return sys
 
+
 def main02(sys: System) -> System:
     """Run negative sequence.
 
-    It creates the negative sequence network of a 
+    It creates the negative sequence network of a
     particular system.
     """
     # Initialize
@@ -501,10 +532,11 @@ def main02(sys: System) -> System:
     sys.build_Y()
     return sys
 
+
 def main00(sys: System) -> System:
     """Run zero sequence.
 
-    It creates the zero sequence network of a 
+    It creates the zero sequence network of a
     particular system.
     """
     # Initialize
@@ -546,6 +578,7 @@ def main00(sys: System) -> System:
     # Get admitance zero sequence:
     sys.build_Y(zero=True)
     return sys
+
 
 if __name__ == '__main__':
     sys = main()       # Get system
