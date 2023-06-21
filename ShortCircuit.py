@@ -79,7 +79,8 @@ class Bus:
                  G: float,
                  B: float,
                  Vb: float,
-                 bus_type: str):
+                 bus_type: str,
+                 aux: bool = False):
         self.V = V
         self.theta = deg*np.pi / 180      # To rad
         self.PL = PL
@@ -88,6 +89,7 @@ class Bus:
         self.B = B     # Susceptance of compensation
         self.Vb = Vb
         self.bus_type = bus_type
+        self.aux = aux
 
     def get_phasor(self) -> complex:
         return self.V * np.exp(1j*self.theta)
@@ -303,8 +305,8 @@ class System:
         return bus
 
     # Load
-    def add_PQ(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None) -> Bus:
-        bus = Bus(V, deg, PL, QL, G, B, Vb, 'PQ')
+    def add_PQ(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None, aux=False) -> Bus:
+        bus = Bus(V, deg, PL, QL, G, B, Vb, 'PQ', aux)
         self.store_bus(bus)
         return bus
 
@@ -334,8 +336,8 @@ class System:
             Lx = [t for t in self.lines if t.Tx]
 
             for L, T in zip(Lx, self.transformers):
-                b0_from = self.add_PQ(-1/1e6)    # Aux. load bus from
-                b0_to = self.add_PQ(-1/1e6)      # Aux. load bus to
+                b0_from = self.add_PQ(-1/1e6, aux=True)    # Aux. load bus from
+                b0_to = self.add_PQ(-1/1e6, aux=True)      # Aux. load bus to
                 b_to = L.to_bus  # Save old toward
                 self.add_line(b0_from, b0_to, T.Xcc_pu)
                 # Update toward
@@ -390,6 +392,13 @@ class System:
                 self.Y[n, n] += line.to_Y + Y_serie
                 self.Y[m, n] -= Y_serie
                 self.Y[n, m] -= Y_serie
+            # Reduce Y
+            nB = len([b for b in self.buses if not b.aux])
+            K = self.Y[:nB, :nB]
+            L = self.Y[:nB, nB:]
+            N = self.Y[nB:, :nB]
+            M = self.Y[nB:, nB:]
+            self.Y = K - np.matmul(np.matmul(L, np.linalg.inv(M)), N)
 
         else:
             N = len(self.buses)
