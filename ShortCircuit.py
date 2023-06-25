@@ -369,11 +369,11 @@ class System:
             # Generators
             for b, g in zip(self.PV_buses, self.generators):
                 if g.Conn == 'Yg':
-                    b.B += -1/1e-6
+                    b.B += 0
                 elif g.Conn == 'Yn':
                     b.B += -1 / (3*g.Xg_pu)
                 elif g.Conn == 'Y':
-                    b.B += -1/g.Xg_pu
+                    b.B = -1/1e6
 
             # Creat Y zero sequence matrix
             N = len(self.buses)
@@ -422,8 +422,8 @@ class System:
 def main() -> System:
     """System data and objects.
 
-    It gets the data of the system, based on that information
-    it sets the instances as well as their attibutes and
+    It gets the data of the system, based on the information.
+    It sets the instances as well as their attibutes and
     convert everything to a common base in p.u.
     """
 
