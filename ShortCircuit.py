@@ -119,6 +119,8 @@ class Line:
 
 
 class System:
+    Sb = 100    # MVA
+    Vb = 138    # kV
     r"""Network.
 
     ``System`` class represents the electric network.
@@ -172,14 +174,18 @@ class System:
         # Create attribute of System class
         self.conductors = conductors
 
-    def set_pu(self, Sb_new: float, Vb_2: float) -> None:
+    def set_pu(self, Sb_new: float, Vb_new: float) -> None:
         """Common base.
 
-        It converts all impedance of the system to a common base
-        where Vb_2 stands for voltage base L-L [kV]
-        in region of transmission.
-
+        It converts and updates all impedance of the system
+        to a common base while other attributes remain the same,
+        where Sb_new stands for new global apparent power base
+        in [MVA] and Vb_new the voltage base L-L in [kV] in region
+        of transmission.
         """
+        # Set arguments as new globla class variables
+        System.Sb = Sb_new
+        System.Vb = Vb_new
         # Original impedance: Generatores pu
         Z0pu_old_G = [g.X0_pu for g in self.generators]
         Z1pu_old_G = [g.Xdpp_pu for g in self.generators]
@@ -203,15 +209,18 @@ class System:
         LH_V = zip(LV_old, HV_old)
         a = [L/H for L, H in LH_V]
 
-        # Set new voltage base in transmission region: Lines
+        # Update attribute to new voltage base in transmission region: Lines
         for L in self.conductors:
-            L.Vnom_kV = Vb_2
+            L.Vnom_kV = Vb_new
         Vb_new_C = [v.Vnom_kV for v in self.conductors]
 
         # New voltages in generators
         def step_down(ratio: list) -> list:
-            return ratio * Vb_2
+            return ratio * Vb_new
         Vb_new_G = list(map(step_down, a))
+        # Update attribute
+        for (g, v) in zip(self.generators, Vb_new_G):
+            g.Vnom_kV = v
 
         # Get original Sb of divices
         Sb_old_G = [g.Snom_MVA for g in self.generators]
@@ -269,7 +278,6 @@ class System:
         for C, Xnew_pu in zip(self.conductors, X1_pu_C):
             C.X1_pu = Xnew_pu
             C.X2_pu = Xnew_pu
-        # Rest attributes remain the same.
 
     def store_bus(self, bus: Bus) -> None:
         """Set and creat bus.
@@ -288,7 +296,7 @@ class System:
 
     def organize_buses(self) -> None:
 
-        """Organize all given buses.
+        """Organize given bus.
 
         It sets buses in this order: [slack, PV, PQ].
         """
@@ -305,14 +313,14 @@ class System:
         return bus
 
     # Load
-    def add_PQ(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None, aux=False) -> Bus:
+    def add_PQ(self, B, Vb, G=0, V=None, deg=0, PL=None, QL=None, aux=False) -> Bus:
         bus = Bus(V, deg, PL, QL, G, B, Vb, 'PQ', aux)
         self.store_bus(bus)
         return bus
 
     # Injectors
-    def add_PV(self, B, G=0, V=None, deg=0, PL=None, QL=None, Vb=None) -> Bus:
-        bus = Bus(V, deg, PL, QL, G, B, Vb, 'PV')
+    def add_PV(self, B, Vb, G=0, V=None, deg=0, PL=None, QL=None, aux=False) -> Bus:
+        bus = Bus(V, deg, PL, QL, G, B, Vb, 'PV', aux)
         self.store_bus(bus)
         return bus
 
@@ -336,8 +344,8 @@ class System:
             Lx = [t for t in self.lines if t.Tx]
 
             for L, T in zip(Lx, self.transformers):
-                b0_from = self.add_PQ(-1/1e6, aux=True)    # Aux. load bus from
-                b0_to = self.add_PQ(-1/1e6, aux=True)      # Aux. load bus to
+                b0_from = self.add_PQ(-1/1e6, T.V1nom_kV, aux=True)    # Aux. load bus from
+                b0_to = self.add_PQ(-1/1e6, T.V2nom_kV, aux=True)      # Aux. load bus to
                 b_to = L.to_bus  # Save old toward
                 self.add_line(b0_from, b0_to, T.Xcc_pu)
                 # Update toward
@@ -369,7 +377,7 @@ class System:
             # Generators
             for b, g in zip(self.PV_buses, self.generators):
                 if g.Conn == 'Yg':
-                    b.B += 0
+                    b.B += 1e-6
                 elif g.Conn == 'Yn':
                     b.B += -1 / (3*g.Xg_pu)
                 elif g.Conn == 'Y':
@@ -418,6 +426,39 @@ class System:
                 self.Y[m, n] -= Y_serie
                 self.Y[n, m] -= Y_serie
 
+    @property
+    def Z(self) -> np.ndarray:
+        """Impedance Matrix.
+
+        It returns the impedance matrix of a specific sequence.
+        """
+        return np.linalg.inv(self.Y)
+
+    def balanced(self, B: int, Vf: complex = 1, Zf: float = 1e-6) -> complex:
+        """Three phase balanced fault.
+
+        It returns the current balanced in both p.u. and kA of a
+        arc fault at arbitrary bus ``B`` through Zf [Ohm] as general case.
+        If Zf is small then it is a bolted short circuit kind of fault.
+        """
+        b = B - 1             # Index of faulted bus
+        Bf = self.buses[b]    # Faulted bus instance
+        Vb = Bf.Vb            # Base voltage
+        # Base impedance at region of bus B
+        Zb = (Vb)**2 / (System.Sb)
+        Zf_pu = Zf / Zb                     # To p.u.
+        Z1 = self.Z                         # Impedance matrix
+        z1 = Z1[b, b]                       # ZTH from bus B
+        If_pu = (Vf) / (z1 + Zf_pu)         # Arc fault
+        Ib = (Vb) / (np.sqrt(3)*System.Sb)  # Base current
+        If_kA = If_pu * Ib
+        return If_pu, If_kA
+
+    def sigle():
+        pass
+
+    def double():
+        pass
 
 def main() -> System:
     """System data and objects.
@@ -462,6 +503,8 @@ def main01(sys: System) -> System:
     sys.PV_buses = []
     sys.lines = []
 
+    # Get new voltages base of each generators
+    Vb_G = [g.Vnom_kV for g in sys.generators]
     # Get reactance
     X1_Gs = [x.Xdpp_pu for x in sys.generators]
     X1cc_Ts = [x.Xcc_pu for x in sys.transformers]
@@ -473,14 +516,14 @@ def main01(sys: System) -> System:
 
     B1_Gs = list(map(to_B, X1_Gs))
     # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B1_Gs[0])
-    b2 = sys.add_PV(B1_Gs[1])
-    b3 = sys.add_PV(B1_Gs[2])
-    b4 = sys.add_PV(B1_Gs[3])
+    b1 = sys.add_PV(B1_Gs[0], Vb_G[0])
+    b2 = sys.add_PV(B1_Gs[1], Vb_G[1])
+    b3 = sys.add_PV(B1_Gs[2], Vb_G[2])
+    b4 = sys.add_PV(B1_Gs[3], Vb_G[3])
     # Load buses
-    b5 = sys.add_PQ(B=0)
-    b6 = sys.add_PQ(B=0)
-    b7 = sys.add_PQ(B=0)
+    b5 = sys.add_PQ(0, System.Vb)
+    b6 = sys.add_PQ(0, System.Vb)
+    b7 = sys.add_PQ(0, System.Vb)
     # Transformers and conductors
     T1 = sys.add_line(b1, b5, X1cc_Ts[0], Tx=True)
     T2 = sys.add_line(b2, b6, X1cc_Ts[1], Tx=True)
@@ -509,6 +552,8 @@ def main02(sys: System) -> System:
     sys.PV_buses = []
     sys.lines = []
 
+    # Get new voltages base of each generators
+    Vb_G = [g.Vnom_kV for g in sys.generators]
     # Get reactance
     X2_Gs = [x.X2_pu for x in sys.generators]
     X2cc_Ts = [x.Xcc_pu for x in sys.transformers]
@@ -520,14 +565,14 @@ def main02(sys: System) -> System:
 
     B2_Gs = list(map(to_B, X2_Gs))
     # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B2_Gs[0])
-    b2 = sys.add_PV(B2_Gs[1])
-    b3 = sys.add_PV(B2_Gs[2])
-    b4 = sys.add_PV(B2_Gs[3])
+    b1 = sys.add_PV(B2_Gs[0], Vb_G[0])
+    b2 = sys.add_PV(B2_Gs[1], Vb_G[1])
+    b3 = sys.add_PV(B2_Gs[2], Vb_G[2])
+    b4 = sys.add_PV(B2_Gs[3], Vb_G[3])
     # Load buses
-    b5 = sys.add_PQ(B=0)
-    b6 = sys.add_PQ(B=0)
-    b7 = sys.add_PQ(B=0)
+    b5 = sys.add_PQ(0, System.Vb)
+    b6 = sys.add_PQ(0, System.Vb)
+    b7 = sys.add_PQ(0, System.Vb)
     # Transformers and conductors
     T1 = sys.add_line(b1, b5, X2cc_Ts[0], Tx=True)
     T2 = sys.add_line(b2, b6, X2cc_Ts[1], Tx=True)
@@ -556,6 +601,8 @@ def main00(sys: System) -> System:
     sys.PV_buses = []
     sys.lines = []
 
+    # Get new voltages base of each generators
+    Vb_G = [g.Vnom_kV for g in sys.generators]
     # Get reactance
     X0_Gs = [x.X0_pu for x in sys.generators]
     X0cc_Ts = [x.Xcc_pu for x in sys.transformers]
@@ -567,14 +614,14 @@ def main00(sys: System) -> System:
 
     B1_Gs = list(map(to_B, X0_Gs))
     # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B1_Gs[0])
-    b2 = sys.add_PV(B1_Gs[1])
-    b3 = sys.add_PV(B1_Gs[2])
-    b4 = sys.add_PV(B1_Gs[3])
+    b1 = sys.add_PV(B1_Gs[0], Vb_G[0])
+    b2 = sys.add_PV(B1_Gs[1], Vb_G[1])
+    b3 = sys.add_PV(B1_Gs[2], Vb_G[2])
+    b4 = sys.add_PV(B1_Gs[3], Vb_G[3])
     # Load buses
-    b5 = sys.add_PQ(B=0)
-    b6 = sys.add_PQ(B=0)
-    b7 = sys.add_PQ(B=0)
+    b5 = sys.add_PQ(0, System.Vb)
+    b6 = sys.add_PQ(0, System.Vb)
+    b7 = sys.add_PQ(0, System.Vb)
     # Transformers and conductors
     T1 = sys.add_line(b1, b5, X0cc_Ts[0], Tx=True)
     T2 = sys.add_line(b2, b6, X0cc_Ts[1], Tx=True)
