@@ -676,9 +676,33 @@ class System:
 
         Due to fault at bus Bf.
         """
-        b = self.buses.index(Bf)
-        print('Faulted bus: ', b+1)
-        pass
+        nB = len(self.buses)
+        Ickt012 = np.zeros((3, nB, nB), dtype=complex)
+        for i in range(nB):
+            for j in range(nB):
+                v0i, v1i, v2i = self.single_fault[Bf][2][i]
+                v0j, v1j, v2j = self.single_fault[Bf][2][j]
+                i0 = -self.Y_012[0][i, j]*(v0i - v0j)
+                i1 = -self.Y_012[1][i, j]*(v1i - v1j)
+                i2 = -self.Y_012[2][i, j]*(v2i - v2j)
+                i_012 = [i0, i1, i2]
+                for n, s in enumerate(i_012):
+                    Ickt012[n, i, j] = s
+
+        # To phase domain
+        Icktabc = np.zeros((3, nB, nB), dtype=complex)
+        for i in range(nB):
+            for j in range(nB):
+                i012 = Ickt012[:, i, j]
+                iabc = self.to_phase(i012)
+                for p, h, in enumerate(iabc):
+                    Icktabc[p, i, j] = h
+
+        # New attribute
+        self.Ickt_fault = {
+            Bf: [Ickt012, Icktabc]
+        }
+        return Bf
 
 def main() -> System:
     """System data and objects.
