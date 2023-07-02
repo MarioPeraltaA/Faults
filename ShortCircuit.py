@@ -126,14 +126,18 @@ class System:
     ``System`` class represents the electric network.
 
     It makes up an auxiliary list in order to organize the buses.
+    It receives seq_type being as the kind of sequence: 0 for zero,
+    1 for positive and 2 for negative.
     """
-    def __init__(self):
+    def __init__(self, seq_type: int = 1):
         self.slack = None
         self.buses = []
         self.non_slack_buses = []
         self.PQ_buses = []
         self.PV_buses = []
         self.lines = []
+        self.Y_012 = [None, None, None]
+        self.seq_type = seq_type
 
     def add_generators(self, data: dict) -> None:
         list_keys = list(data.keys())
@@ -295,7 +299,6 @@ class System:
         self.organize_buses()
 
     def organize_buses(self) -> None:
-
         """Organize given bus.
 
         It sets buses in this order: [slack, PV, PQ].
@@ -334,12 +337,12 @@ class System:
         self.lines.append(line)
         return line
 
-    def build_Y(self, zero: bool = False) -> None:
+    def build_Y(self) -> None:
         """Admitance matrix of any sequence network.
 
         Matrix Y come to become a attribute of the ``System`` class.
         """
-        if zero:
+        if self.seq_type == 0:
             # Transformers
             Lx = [t for t in self.lines if t.Tx]
 
@@ -383,12 +386,12 @@ class System:
                 elif g.Conn == 'Y':
                     b.B = -1/1e6
 
-            # Creat Y zero sequence matrix
+            # Creat empty Y zero sequence matrix
             N = len(self.buses)
-            self.Y = np.zeros((N, N), dtype=complex)
+            Y0 = np.zeros((N, N), dtype=complex)
             # Due to compensations to a single bar
             for (i, bus) in enumerate(self.buses):
-                self.Y[i, i] += bus.G + 1j*bus.B
+                Y0[i, i] += bus.G + 1j*bus.B
             # Due to Lines
             for line in self.lines:
                 m = self.buses.index(line.from_bus)
@@ -396,24 +399,25 @@ class System:
                 # Get series admitance of the line
                 Y_serie = (1) / (line.R_pu + 1j*line.X_pu)
                 # Build Y
-                self.Y[m, m] += line.from_Y + Y_serie
-                self.Y[n, n] += line.to_Y + Y_serie
-                self.Y[m, n] -= Y_serie
-                self.Y[n, m] -= Y_serie
+                Y0[m, m] += line.from_Y + Y_serie
+                Y0[n, n] += line.to_Y + Y_serie
+                Y0[m, n] -= Y_serie
+                Y0[n, m] -= Y_serie
             # Reduce Y
             nB = len([b for b in self.buses if not b.aux])
-            K = self.Y[:nB, :nB]
-            L = self.Y[:nB, nB:]
-            N = self.Y[nB:, :nB]
-            M = self.Y[nB:, nB:]
-            self.Y = K - np.matmul(np.matmul(L, np.linalg.inv(M)), N)
+            K = Y0[:nB, :nB]
+            L = Y0[:nB, nB:]
+            N = Y0[nB:, :nB]
+            M = Y0[nB:, nB:]
+            Y0 = K - np.matmul(np.matmul(L, np.linalg.inv(M)), N)
+            self.Y_012[0] = Y0
 
         else:
             N = len(self.buses)
-            self.Y = np.zeros((N, N), dtype=complex)
+            Y12 = np.zeros((N, N), dtype=complex)
             # Due to compensations to a single bar
             for (i, bus) in enumerate(self.buses):
-                self.Y[i, i] += bus.G + 1j*bus.B
+                Y12[i, i] += bus.G + 1j*bus.B
             # Due to Lines
             for line in self.lines:
                 m = self.buses.index(line.from_bus)
@@ -421,44 +425,251 @@ class System:
                 # Get series admitance of the line
                 Y_serie = (1) / (line.R_pu + 1j*line.X_pu)
                 # Build Y
-                self.Y[m, m] += line.from_Y + Y_serie
-                self.Y[n, n] += line.to_Y + Y_serie
-                self.Y[m, n] -= Y_serie
-                self.Y[n, m] -= Y_serie
+                Y12[m, m] += line.from_Y + Y_serie
+                Y12[n, n] += line.to_Y + Y_serie
+                Y12[m, n] -= Y_serie
+                Y12[n, m] -= Y_serie
+            self.Y_012[self.seq_type] = Y12
 
     @property
-    def Z(self) -> np.ndarray:
+    def Z_012(self) -> tuple[np.ndarray]:
         """Impedance Matrix.
 
-        It returns the impedance matrix of a specific sequence.
+        It returns the tuple of impedance matrix of each sequence.
         """
-        return np.linalg.inv(self.Y)
+        Y0 = self.Y_012[0]
+        Y1 = self.Y_012[1]
+        Y2 = self.Y_012[2]
+        Z0 = np.linalg.inv(Y0)
+        Z1 = np.linalg.inv(Y1)
+        Z2 = np.linalg.inv(Y2)
+        return (Z0, Z1, Z2)
 
-    def balanced(self, B: int, Vf: complex = 1, Zf: float = 1e-6) -> complex:
-        """Three phase balanced fault.
+    def to_phase(self, S_012: np.ndarray) -> np.ndarray:
+        """Matrix A.
 
-        It returns the current balanced in both p.u. and kA of a
-        arc fault at arbitrary bus ``B`` through Zf [Ohm] as general case.
+        In order to switch from sequence domain to phase domain.
+        """
+        a = -1/2 + np.sqrt(3)*1j/2
+        A = np.array([[1, 1, 1], [1, a**2, a], [1, a, a**2]])
+        return A @ S_012
+
+    def get_allVoltages(self,
+                        Bf: Bus,
+                        Vf: complex,
+                        Z_012: np.ndarray[complex],
+                        I_012: np.ndarray[complex]) -> np.ndarray[complex]:
+        I_0, I_1, I_2 = I_012
+        Z_0, Z_1, Z_2 = Z_012
+        b = self.buses.index(Bf)       # Index of faulted bus
+        nB = len(self.buses)           # Number of buses
+        # Current is zero in all buses but the
+        # faulted bus and such leaves the system, then:
+        Isys0 = np.zeros(nB, dtype=complex)
+        Isys1 = np.zeros(nB, dtype=complex)
+        Isys2 = np.zeros(nB, dtype=complex)
+        # Update current at faulted bus
+        Isys0[b] = -I_0
+        Isys1[b] = -I_1
+        Isys2[b] = -I_2
+        # Pre fault Vf source column vector
+        VF = np.full(nB, Vf, dtype=complex)
+        V0_ckt = Z_0 @ Isys0        # Zero
+        V1_ckt = VF + Z_1@Isys1     # Positive
+        V2_ckt = Z_2 @ Isys2        # Negative
+        # Stask horizontally as columns
+        V012_ckt = np.column_stack((V0_ckt, V1_ckt, V2_ckt))
+        return V012_ckt
+
+    def balanced(self,
+                 B: int,
+                 Vf: complex = 1,
+                 Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+        """Three-phase-to-ground balanced fault.
+
+        Sets new attribute that contain both current and voltages
+        fault in pu of each phase as dictionary whose key is the faulted bus.
+        It calculates the balanced current fault and voltages in phase domain
+        of the circuit during fault in p.u. of a arcing fault
+        at arbitrary bus ``B`` through Zf [Ohm] as general case.
         If Zf is small then it is a bolted short circuit kind of fault.
+
+        Note: It only takes positive sequence of arbitrary phase.
         """
-        b = B - 1             # Index of faulted bus
-        Bf = self.buses[b]    # Faulted bus instance
-        Vb = Bf.Vb            # Base voltage
+        b = B - 1               # Index of faulted bus
+        Bf = self.buses[b]      # Faulted bus instance
+        Vbase = Bf.Vb           # Base voltage
         # Base impedance at region of bus B
-        Zb = (Vb)**2 / (System.Sb)
-        Zf_pu = Zf / Zb                     # To p.u.
-        Z1 = self.Z                         # Impedance matrix
-        z1 = Z1[b, b]                       # ZTH from bus B
-        If_pu = (Vf) / (z1 + Zf_pu)         # Arc fault
-        Ib = (Vb) / (np.sqrt(3)*System.Sb)  # Base current
-        If_kA = If_pu * Ib
-        return If_pu, If_kA
+        Zb = (Vbase)**2 / (System.Sb)
+        Zf_pu = Zf / Zb         # To p.u.
 
-    def sigle():
-        pass
+        Z012 = self.Z_012       # Impedance matrix
+        Z1 = Z012[1]            # Positive seq. only
+        Z_TH = Z1[b, b]         # Z_TH from bus B
 
-    def double():
-        pass
+        # Current sequence arcing fault in pu
+        I1f_pu = (Vf) / (Z_TH + Zf_pu)        # Positive seq.
+        I012 = np.array([0, I1f_pu, 0])       # Column vector of I sequences
+
+        # Voltages during fault in pu
+        V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
+        # To phase domain
+        Iabc_pu = self.to_phase(I012)
+        nB = len(self.buses)
+        Vabc_pu = []
+        for i in range(nB):
+            Vabc_pu.append(self.to_phase(V012ckt[i]))
+
+        # Set new attribute
+        self.balanced_fault = {
+            Bf: [Iabc_pu, Vabc_pu]
+        }
+        return Bf
+
+    def single(self,
+              B: int,
+              Vf: complex = 1,
+              Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+        """Single line-to-ground fault.
+
+        Sets new attribute that contain both current and voltages
+        fault in pu of each phase.
+        Consider a single line-to-ground fault from arbitrary phase to ground
+        at the general three-phase bus. For generality, a fault
+        impedance Zf is included. In the case of a bolted
+        fault, Zf = 1e-6 [Ohm], whereas for an arcing fault,
+        Zf is the arc impedance.
+        """
+        b = B - 1               # Index of faulted bus
+        Bf = self.buses[b]      # Faulted bus instance
+        Vbase = Bf.Vb           # Base voltage
+        # Base impedance at region of bus B
+        Zb = (Vbase)**2 / (System.Sb)
+        Zf_pu = Zf / Zb         # To p.u.
+
+        Z012 = self.Z_012       # Impedance matrix
+        Z0 = Z012[0]
+        Z0_TH = Z0[b, b]
+        Z1 = Z012[1]
+        Z1_TH = Z1[b, b]
+        Z2 = Z012[2]
+        Z2_TH = Z2[b, b]
+
+        # Current sequence arcing fault in pu
+        I0f_pu = (Vf) / (Z0_TH+Z1_TH+Z2_TH+3*Zf_pu)    # Zero seq.
+        I1f_pu = I0f_pu              # Positive seq.
+        I2f_pu = I0f_pu              # Negative seq.
+        I012 = np.array([I0f_pu, I1f_pu, I2f_pu])     # Column vector of I sequences
+
+        # Voltages during fault in pu
+        V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
+        # To phase domain
+        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Vabc_pu = []                    # All voltages of the network
+        nB = len(self.buses)
+        for i in range(nB):
+            Vabc_pu.append(self.to_phase(V012ckt[i]))
+
+        # Set new attribute
+        self.single_fault = {
+            Bf: [Iabc_pu, Vabc_pu]
+        }
+        return Bf
+
+    def line_to_line(self,
+                     B: int,
+                     Vf: complex = 1,
+                     Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+        """Line-to-line fault.
+
+        Sets new attribute that contain both current and voltages
+        fault in pu  of each phase.
+        Consider a line-to-line fault between two arbitrary phases.
+        It includes a fault impedance ZF for generality.
+        """
+        b = B - 1               # Index of faulted bus
+        Bf = self.buses[b]      # Faulted bus instance
+        Vbase = Bf.Vb           # Base voltage
+        # Base impedance at region of bus B
+        Zb = (Vbase)**2 / (System.Sb)
+        Zf_pu = Zf / Zb         # To p.u.
+
+        Z012 = self.Z_012       # Impedance matrix
+        Z1 = Z012[1]
+        Z1_TH = Z1[b, b]
+        Z2 = Z012[2]
+        Z2_TH = Z2[b, b]
+
+        # Current sequence arcing fault in pu
+        I0f_pu = 0    # Zero seq.
+        I1f_pu = Vf / (Z1_TH+Z2_TH+Zf_pu)    # Positive seq.
+        I2f_pu = -I1f_pu                      # Negative seq.
+        I012 = np.array([I0f_pu, I1f_pu, I2f_pu])     # Column vector of I sequences
+
+        # Voltages during fault in pu
+        V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
+        # To phase domain
+        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Vabc_pu = []                    # All voltages of the network
+        nB = len(self.buses)
+        for i in range(nB):
+            Vabc_pu.append(self.to_phase(V012ckt[i]))
+
+        # Set new attribute
+        self.line_line_fault = {
+            Bf: [Iabc_pu, Vabc_pu]
+        }
+        return Bf
+
+    def double_to_ground(self,
+               B: int,
+               Vf: complex = 1,
+               Zf: float = 1e-6) -> tuple[np.ndarray[complex]]:
+        """Double line-to-ground fault.
+
+        Sets new attribute that contain both current and voltages
+        fault in pu of each phase.
+        A double line-to-ground fault between two arbitrary phases
+        through fault impedance Zf to ground.
+        In the case of a bolted fault, Zf = 1e-6 [Ohm],
+        whereas for an arcing fault, Zf is the arc impedance.
+        """
+        b = B - 1               # Index of faulted bus
+        Bf = self.buses[b]      # Faulted bus instance
+        Vbase = Bf.Vb           # Base voltage
+        # Base impedance at region of bus B
+        Zb = (Vbase)**2 / (System.Sb)
+        Zf_pu = Zf / Zb         # To p.u.
+
+        Z012 = self.Z_012       # Impedance matrix
+        Z0 = Z012[0]
+        Z0_TH = Z0[b, b]
+        Z1 = Z012[1]
+        Z1_TH = Z1[b, b]
+        Z2 = Z012[2]
+        Z2_TH = Z2[b, b]
+
+        # Current sequence arcing fault in pu
+        Zeq = (Z2_TH*(Z0_TH+3*Zf_pu)) / (Z0_TH+Z2_TH+3*Zf_pu)
+        I1f_pu = (Vf) / (Z1_TH+Zeq)                        # Positive seq.
+        I0f_pu = (-I1f_pu*Z2_TH) / (Z0_TH+Z2_TH+3*Zf_pu)   # Zero seq.
+        I2f_pu = (-I1f_pu*(Z0_TH+3*Zf_pu)) / (Z0_TH+Z2_TH+3*Zf_pu)    # Negative seq.
+        I012 = np.array([I0f_pu, I1f_pu, I2f_pu])     # Column vector of I sequences
+
+        # Voltages during fault in pu
+        V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
+        # To phase domain
+        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Vabc_pu = []                    # All voltages of the network
+        nB = len(self.buses)
+        for i in range(nB):
+            Vabc_pu.append(self.to_phase(V012ckt[i]))
+
+        # Set new attribute
+        self.double_fault = {
+            Bf: [Iabc_pu, Vabc_pu]
+        }
+        return Bf
 
 def main() -> System:
     """System data and objects.
@@ -489,174 +700,77 @@ def main() -> System:
     return sys
 
 
-def main01(sys: System) -> System:
-    """Run positive sequence.
+def sys_012(sys: System) -> System:
 
-    It creates the positive sequence network of a
-    particular system.
-    """
-    # Initialize
-    sys.slack = None
-    sys.buses = []
-    sys.non_slack_buses = []
-    sys.PQ_buses = []
-    sys.PV_buses = []
-    sys.lines = []
+    # To susceptance
+    def to_B(X):
+        return -1 / X
 
     # Get new voltages base of each generators
     Vb_G = [g.Vnom_kV for g in sys.generators]
-    # Get reactance
+
+    # Get zero seq. reactance
+    X0_Gs = [x.X0_pu for x in sys.generators]
+    X0cc_Ts = [x.Xcc_pu for x in sys.transformers]
+    X0_C = [x.X0_pu for x in sys.conductors]          
+    # Get positive seq. reactance
     X1_Gs = [x.Xdpp_pu for x in sys.generators]
     X1cc_Ts = [x.Xcc_pu for x in sys.transformers]
     X1_C = [x.X1_pu for x in sys.conductors]
-
-    # To susceptance
-    def to_B(X):
-        return -1 / X
-
-    B1_Gs = list(map(to_B, X1_Gs))
-    # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B1_Gs[0], Vb_G[0])
-    b2 = sys.add_PV(B1_Gs[1], Vb_G[1])
-    b3 = sys.add_PV(B1_Gs[2], Vb_G[2])
-    b4 = sys.add_PV(B1_Gs[3], Vb_G[3])
-    # Load buses
-    b5 = sys.add_PQ(0, System.Vb)
-    b6 = sys.add_PQ(0, System.Vb)
-    b7 = sys.add_PQ(0, System.Vb)
-    # Transformers and conductors
-    T1 = sys.add_line(b1, b5, X1cc_Ts[0], Tx=True)
-    T2 = sys.add_line(b2, b6, X1cc_Ts[1], Tx=True)
-    T3 = sys.add_line(b3, b7, X1cc_Ts[2], Tx=True)
-    T4 = sys.add_line(b4, b7, X1cc_Ts[3], Tx=True)
-    L56 = sys.add_line(b5, b6, X1_C[0])
-    L57 = sys.add_line(b5, b7, X1_C[1])
-    L67 = sys.add_line(b6, b7, X1_C[2])
-
-    # Get admitance positive sequence:
-    sys.build_Y()
-    return sys
-
-
-def main02(sys: System) -> System:
-    """Run negative sequence.
-
-    It creates the negative sequence network of a
-    particular system.
-    """
-    # Initialize
-    sys.slack = None
-    sys.buses = []
-    sys.non_slack_buses = []
-    sys.PQ_buses = []
-    sys.PV_buses = []
-    sys.lines = []
-
-    # Get new voltages base of each generators
-    Vb_G = [g.Vnom_kV for g in sys.generators]
-    # Get reactance
+    # Get negative seq. reactance
     X2_Gs = [x.X2_pu for x in sys.generators]
     X2cc_Ts = [x.Xcc_pu for x in sys.transformers]
     X2_C = [x.X2_pu for x in sys.conductors]
-
-    # To susceptance
-    def to_B(X):
-        return -1 / X
-
+    # Generators as compensators, set X as susceptance
+    B0_Gs = list(map(to_B, X0_Gs))
+    B1_Gs = list(map(to_B, X1_Gs))
     B2_Gs = list(map(to_B, X2_Gs))
-    # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B2_Gs[0], Vb_G[0])
-    b2 = sys.add_PV(B2_Gs[1], Vb_G[1])
-    b3 = sys.add_PV(B2_Gs[2], Vb_G[2])
-    b4 = sys.add_PV(B2_Gs[3], Vb_G[3])
-    # Load buses
-    b5 = sys.add_PQ(0, System.Vb)
-    b6 = sys.add_PQ(0, System.Vb)
-    b7 = sys.add_PQ(0, System.Vb)
-    # Transformers and conductors
-    T1 = sys.add_line(b1, b5, X2cc_Ts[0], Tx=True)
-    T2 = sys.add_line(b2, b6, X2cc_Ts[1], Tx=True)
-    T3 = sys.add_line(b3, b7, X2cc_Ts[2], Tx=True)
-    T4 = sys.add_line(b4, b7, X2cc_Ts[3], Tx=True)
-    L56 = sys.add_line(b5, b6, X2_C[0])
-    L57 = sys.add_line(b5, b7, X2_C[1])
-    L67 = sys.add_line(b6, b7, X2_C[2])
+    # Store in iterable
+    seq = {
+        0: [B0_Gs, X0cc_Ts, X0_C],
+        1: [B1_Gs, X1cc_Ts, X1_C],
+        2: [B2_Gs, X2cc_Ts, X2_C]
+    }
 
-    # Get admitance negative sequence:
-    sys.build_Y()
-    return sys
+    # Get admitance matrix for each sequence
+    for k, values in seq.items():
+        # Initialize
+        sys.buses = []
+        sys.non_slack_buses = []
+        sys.PQ_buses = []
+        sys.PV_buses = []
+        sys.lines = []
+        sys.seq_type = k
 
-
-def main00(sys: System) -> System:
-    """Run zero sequence.
-
-    It creates the zero sequence network of a
-    particular system.
-    """
-    # Initialize
-    sys.slack = None
-    sys.buses = []
-    sys.non_slack_buses = []
-    sys.PQ_buses = []
-    sys.PV_buses = []
-    sys.lines = []
-
-    # Get new voltages base of each generators
-    Vb_G = [g.Vnom_kV for g in sys.generators]
-    # Get reactance
-    X0_Gs = [x.X0_pu for x in sys.generators]
-    X0cc_Ts = [x.Xcc_pu for x in sys.transformers]
-    X0_C = [x.X0_pu for x in sys.conductors]
-
-    # To susceptance
-    def to_B(X):
-        return -1 / X
-
-    B1_Gs = list(map(to_B, X0_Gs))
-    # Creat buses with compensators (generators)
-    b1 = sys.add_PV(B1_Gs[0], Vb_G[0])
-    b2 = sys.add_PV(B1_Gs[1], Vb_G[1])
-    b3 = sys.add_PV(B1_Gs[2], Vb_G[2])
-    b4 = sys.add_PV(B1_Gs[3], Vb_G[3])
-    # Load buses
-    b5 = sys.add_PQ(0, System.Vb)
-    b6 = sys.add_PQ(0, System.Vb)
-    b7 = sys.add_PQ(0, System.Vb)
-    # Transformers and conductors
-    T1 = sys.add_line(b1, b5, X0cc_Ts[0], Tx=True)
-    T2 = sys.add_line(b2, b6, X0cc_Ts[1], Tx=True)
-    T3 = sys.add_line(b3, b7, X0cc_Ts[2], Tx=True)
-    T4 = sys.add_line(b4, b7, X0cc_Ts[3], Tx=True)
-    L56 = sys.add_line(b5, b6, X0_C[0])
-    L57 = sys.add_line(b5, b7, X0_C[1])
-    L67 = sys.add_line(b6, b7, X0_C[2])
-
-    # Get admitance zero sequence:
-    sys.build_Y(zero=True)
+        for n, p in enumerate(values):
+            # Creat buses with compensators (generators)
+            if n == 0:
+                b1 = sys.add_PV(p[0], Vb_G[0])
+                b2 = sys.add_PV(p[1], Vb_G[1])
+                b3 = sys.add_PV(p[2], Vb_G[2])
+                b4 = sys.add_PV(p[3], Vb_G[3])
+                # Load buses
+                b5 = sys.add_PQ(0, System.Vb)
+                b6 = sys.add_PQ(0, System.Vb)
+                b7 = sys.add_PQ(0, System.Vb)
+                continue
+            # Transformers
+            elif n == 1:
+                T1 = sys.add_line(b1, b5, p[0], Tx=True)
+                T2 = sys.add_line(b2, b6, p[1], Tx=True)
+                T3 = sys.add_line(b3, b7, p[2], Tx=True)
+                T4 = sys.add_line(b4, b7, p[3], Tx=True)
+                continue
+            # Lines
+            elif n == 2:
+                L56 = sys.add_line(b5, b6, p[0])
+                L57 = sys.add_line(b5, b7, p[1])
+                L67 = sys.add_line(b6, b7, p[2])
+        # Get Y admitance per sequence
+        sys.build_Y()
     return sys
 
 
 if __name__ == '__main__':
-    sys = main()       # Get system
-    # Show all objects of the system:
-    print('\n ** Generator **')
-    for g in sys.generators:
-        print(g.__dict__)
-
-    print('\n ** Transformer **')
-    for t in sys.transformers:
-        print(t.__dict__)
-
-    print('\n ** Conductor **')
-    for c in sys.conductors:
-        print(c.__dict__)
-
-    print('\n ** Positve Seq. ** \n')
-    sys = main01(sys)
-    print(sys.Y)
-    print('\n ** Negative Seq. ** \n')
-    sys = main02(sys)
-    print(sys.Y)
-    sys = main00(sys)
-    print('\n ** Zero Seq. ** \n')
-    print(sys.Y)
+    sys = main()                 # Get system
+    sys012 = sys_012(sys=sys)    # Y matrix of each sequence
