@@ -522,7 +522,7 @@ class System:
 
         # Set new attribute
         self.balanced_fault = {
-            Bf: [Iabc_pu, Vabc_pu]
+            Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
 
@@ -572,7 +572,7 @@ class System:
 
         # Set new attribute
         self.single_fault = {
-            Bf: [Iabc_pu, Vabc_pu]
+            Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
 
@@ -617,7 +617,7 @@ class System:
 
         # Set new attribute
         self.line_line_fault = {
-            Bf: [Iabc_pu, Vabc_pu]
+            Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
 
@@ -653,7 +653,7 @@ class System:
         Zeq = (Z2_TH*(Z0_TH+3*Zf_pu)) / (Z0_TH+Z2_TH+3*Zf_pu)
         I1f_pu = (Vf) / (Z1_TH+Zeq)                        # Positive seq.
         I0f_pu = (-I1f_pu*Z2_TH) / (Z0_TH+Z2_TH+3*Zf_pu)   # Zero seq.
-        I2f_pu = (-I1f_pu*(Z0_TH+3*Zf_pu)) / (Z0_TH+Z2_TH+3*Zf_pu)    # Negative seq.
+        I2f_pu = (-I1f_pu*(Z0_TH+3*Zf_pu)) / (Z0_TH+Z2_TH+3*Zf_pu)  # Negative seq.
         I012 = np.array([I0f_pu, I1f_pu, I2f_pu])     # Column vector of I sequences
 
         # Voltages during fault in pu
@@ -667,9 +667,18 @@ class System:
 
         # Set new attribute
         self.double_fault = {
-            Bf: [Iabc_pu, Vabc_pu]
+            Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
+
+    def I_ckt(self, Bf: Bus):
+        """Current across the network.
+
+        Due to fault at bus Bf.
+        """
+        b = self.buses.index(Bf)
+        print('Faulted bus: ', b+1)
+        pass
 
 def main() -> System:
     """System data and objects.
