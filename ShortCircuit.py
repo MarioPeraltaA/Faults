@@ -138,6 +138,7 @@ class System:
         self.lines = []
         self.Y_012 = [None, None, None]
         self.seq_type = seq_type
+        self.fault = {}
 
     def add_generators(self, data: dict) -> None:
         list_keys = list(data.keys())
@@ -445,7 +446,7 @@ class System:
         Z2 = np.linalg.inv(Y2)
         return (Z0, Z1, Z2)
 
-    def to_phase(self, S_012: np.ndarray) -> np.ndarray:
+    def seq2phase(self, S_012: np.ndarray) -> np.ndarray:
         """Matrix A.
 
         In order to switch from sequence domain to phase domain.
@@ -484,7 +485,7 @@ class System:
     def balanced(self,
                  B: int,
                  Vf: complex = 1,
-                 Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+                 Zf: float = 1e-6) -> Bus:
         """Three-phase-to-ground balanced fault.
 
         Sets new attribute that contain both current and voltages
@@ -514,14 +515,14 @@ class System:
         # Voltages during fault in pu
         V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
         # To phase domain
-        Iabc_pu = self.to_phase(I012)
+        Iabc_pu = self.seq2phase(I012)
         nB = len(self.buses)
         Vabc_pu = []
         for i in range(nB):
-            Vabc_pu.append(self.to_phase(V012ckt[i]))
+            Vabc_pu.append(self.seq2phase(V012ckt[i]))
 
         # Set new attribute
-        self.balanced_fault = {
+        self.fault = {
             Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
@@ -529,7 +530,7 @@ class System:
     def single(self,
               B: int,
               Vf: complex = 1,
-              Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+              Zf: float = 1e-6) -> Bus:
         """Single line-to-ground fault.
 
         Sets new attribute that contain both current and voltages
@@ -564,14 +565,14 @@ class System:
         # Voltages during fault in pu
         V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
         # To phase domain
-        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Iabc_pu = self.seq2phase(I012)   # Current at fault location
         Vabc_pu = []                    # All voltages of the network
         nB = len(self.buses)
         for i in range(nB):
-            Vabc_pu.append(self.to_phase(V012ckt[i]))
+            Vabc_pu.append(self.seq2phase(V012ckt[i]))
 
         # Set new attribute
-        self.single_fault = {
+        self.fault = {
             Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
@@ -579,7 +580,7 @@ class System:
     def line_to_line(self,
                      B: int,
                      Vf: complex = 1,
-                     Zf: float = 1e-6) -> dict[list[np.ndarray[complex]]]:
+                     Zf: float = 1e-6) -> Bus:
         """Line-to-line fault.
 
         Sets new attribute that contain both current and voltages
@@ -609,14 +610,14 @@ class System:
         # Voltages during fault in pu
         V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
         # To phase domain
-        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Iabc_pu = self.seq2phase(I012)   # Current at fault location
         Vabc_pu = []                    # All voltages of the network
         nB = len(self.buses)
         for i in range(nB):
-            Vabc_pu.append(self.to_phase(V012ckt[i]))
+            Vabc_pu.append(self.seq2phase(V012ckt[i]))
 
         # Set new attribute
-        self.line_line_fault = {
+        self.fault = {
             Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
@@ -624,7 +625,7 @@ class System:
     def double_to_ground(self,
                B: int,
                Vf: complex = 1,
-               Zf: float = 1e-6) -> tuple[np.ndarray[complex]]:
+               Zf: float = 1e-6) -> Bus:
         """Double line-to-ground fault.
 
         Sets new attribute that contain both current and voltages
@@ -659,50 +660,169 @@ class System:
         # Voltages during fault in pu
         V012ckt = self.get_allVoltages(Bf, Vf, Z012, I012)
         # To phase domain
-        Iabc_pu = self.to_phase(I012)   # Current at fault location
+        Iabc_pu = self.seq2phase(I012)   # Current at fault location
         Vabc_pu = []                    # All voltages of the network
         nB = len(self.buses)
         for i in range(nB):
-            Vabc_pu.append(self.to_phase(V012ckt[i]))
+            Vabc_pu.append(self.seq2phase(V012ckt[i]))
 
         # Set new attribute
-        self.double_fault = {
+        self.fault = {
             Bf: [I012, Iabc_pu, V012ckt, Vabc_pu]
         }
         return Bf
 
-    def I_ckt(self, Bf: Bus):
+    def I_ckt(self, Bf: Bus) -> Bus:
         """Current across the network.
 
         Due to fault at bus Bf.
         """
         nB = len(self.buses)
         Ickt012 = np.zeros((3, nB, nB), dtype=complex)
-        for i in range(nB):
-            for j in range(nB):
-                v0i, v1i, v2i = self.single_fault[Bf][2][i]
-                v0j, v1j, v2j = self.single_fault[Bf][2][j]
-                i0 = -self.Y_012[0][i, j]*(v0i - v0j)
-                i1 = -self.Y_012[1][i, j]*(v1i - v1j)
-                i2 = -self.Y_012[2][i, j]*(v2i - v2j)
-                i_012 = [i0, i1, i2]
-                for n, s in enumerate(i_012):
-                    Ickt012[n, i, j] = s
+        for L in self.lines:
+            i = self.buses.index(L.from_bus)
+            j = self.buses.index(L.to_bus)
+            vi012 = self.fault[Bf][2][i]
+            vj012 = self.fault[Bf][2][j]
+            y012 = np.empty(3, dtype=complex)
+            for n, y in enumerate(self.Y_012):
+                y012[n] = y[i, j]
+
+            i_012 = -y012 * (vi012-vj012)      # Element wise
+            Ickt012[:, i, j] = i_012
+            Ickt012[:, j, i] = -i_012
 
         # To phase domain
         Icktabc = np.zeros((3, nB, nB), dtype=complex)
-        for i in range(nB):
-            for j in range(nB):
-                i012 = Ickt012[:, i, j]
-                iabc = self.to_phase(i012)
-                for p, h, in enumerate(iabc):
-                    Icktabc[p, i, j] = h
+        for L in self.lines:
+            m = self.buses.index(L.from_bus)
+            n = self.buses.index(L.to_bus)
+            iabc = self.seq2phase(Ickt012[:, m, n])
+            Icktabc[:, m, n] = iabc
+            Icktabc[:, n, m] = -iabc
 
         # New attribute
         self.Ickt_fault = {
             Bf: [Ickt012, Icktabc]
         }
         return Bf
+
+    @property
+    def fault_pu2natural(self) -> None:
+        """Convert values to kA and kV.
+
+        Convert values from p.u. to kA at the place of faulted bus
+        and to kV in all buses during such fault
+        of both sequences and phases values and
+        updates the attribute.
+        """
+        for Bf in self.fault.keys():
+            Vfbase = Bf.Vb     #3phase
+            Ibase = System.Sb / (np.sqrt(3)*Vfbase)    #1phase
+            # Current at fault
+            self.fault[Bf][0] *= Ibase          # Seq.
+            self.fault[Bf][1] *= Ibase          # Phase
+            # All voltages
+            for i, b in enumerate(self.buses):
+                Vb_1ph = b.Vb / np.sqrt(3)
+                self.fault[Bf][2][i] *= Vb_1ph   # Seq.
+                self.fault[Bf][3][i] *= Vb_1ph   # Phase
+
+    @property
+    def Ickt_pu2kA(self) -> None:
+        """Convert values to kA.
+
+        It converts the current in p.u. all across the network
+        to kA of both sequences and phases values and
+        updates the attribute.
+        """
+        # Current base through the circuit: 1phase
+        Sbsys = System.Sb
+        Vbsys = System.Vb           # In transmission region
+        nB = len(self.buses)
+        Ickt_base = np.zeros((nB, nB), dtype=complex)
+        # Through transformers
+        T = [L for L in self.lines if L.Tx]
+        for t in T:
+            i = self.buses.index(t.from_bus)
+            j = self.buses.index(t.to_bus)
+            Vbi = t.from_bus.Vb
+            Vbj = t.to_bus.Vb
+            Yb = (Sbsys) / (Vbsys**2)
+            Ickt_base[i, j] = -Yb*(Vbi - Vbj) / (np.sqrt(3))
+            Ickt_base[j, i] = -Yb*(Vbj - Vbi) / (np.sqrt(3))
+        # Through conductors
+        C = [L for L in self.lines if not L.Tx]
+        for c in C:
+            m = self.buses.index(c.from_bus)
+            n = self.buses.index(c.to_bus)
+            Ickt_base[m, n] = (Sbsys) / (np.sqrt(3)*Vbsys)
+            Ickt_base[n, m] = -(Sbsys) / (np.sqrt(3)*Vbsys)
+        # To kA
+        for Bf in self.Ickt_fault.keys():
+            for L in self.lines:
+                p = self.buses.index(L.from_bus)
+                q = self.buses.index(L.to_bus)
+                self.Ickt_fault[Bf][0][:, p, q] *= Ickt_base[p, q]
+                self.Ickt_fault[Bf][0][:, q, p] *= Ickt_base[q, p]
+                self.Ickt_fault[Bf][1][:, p, q] *= Ickt_base[p, q]
+                self.Ickt_fault[Bf][1][:, q, p] *= Ickt_base[q, p]
+
+    def show_results(self, Bf: Bus) -> str:
+        b = self.buses.index(Bf)
+        # in p.u.
+        with open('./resultsSC.txt', 'w') as file:
+            file.write('************************************************************************ \n')
+            file.write(f'Results of fault at bus {b+1} in p.u. using {System.Sb} MVA as global apparent\n')    # Title
+            file.write(f'power base and {System.Vb} kV as voltage base in transmission region.\n')    # Title
+            file.write('************************************************************************ \n')
+            # Current
+            Ifabc = self.fault[Bf][1]
+            # Voltage all buses
+            Vabc_ckt = self.fault[Bf][3]
+            # Current ckt
+            Iabc_ckt = self.Ickt_fault[Bf][1]
+            file.write(f'\n Current of each phase (a, b, c) at the faulted bus: {b+1} \n')
+            for i in Ifabc:
+                file.write(f'{i}\n')
+            file.write(f'\nVoltage of each phase (a, b, c) in all buses during fault at bus {b+1}: \n')
+            file.write('At Bus: V(a, b, c)p.u.\n')
+            for n, v in enumerate(Vabc_ckt):
+                file.write(f'{n+1}: {v}\n')
+            file.write(f'\n Current of each phase all across the network: \n')
+            file.write('From bus -> To bus: I(a, b, c) p.u. \n')
+            for L in self.lines:
+                i = self.buses.index(L.from_bus)
+                j = self.buses.index(L.to_bus)
+                file.write(f'{i+1} -> {j+1}: {Iabc_ckt[:, i, j]}\n')
+
+            # to kA, kV
+            self.fault_pu2natural
+            self.Ickt_pu2kA
+            file.write('\n ************************************************************ \n')
+            file.write(f'Results of fault at bus {b+1} in kA for current and kV for voltage\n')
+            file.write(f'using {System.Sb} MVA as global apparent power base\n')
+            file.write(f'and {System.Vb} kV as voltage base in transmission region.\n')
+            file.write('************************************************************ \n')
+            # Current
+            Ifabc = self.fault[Bf][1]
+            # Voltage all buses
+            Vabc_ckt = self.fault[Bf][3]
+            # Current ckt
+            Iabc_ckt = self.Ickt_fault[Bf][1]
+            file.write(f'\n Current of each phase (a, b, c) at the faulted bus: {b+1} \n')
+            for i in Ifabc:
+                file.write(f'{i}\n')
+            file.write(f'\n Voltage of each phase (a, b, c) in all buses during fault at bus {b+1}: \n')
+            file.write('At Bus: V(a, b, c) kV.\n')
+            for n, v in enumerate(Vabc_ckt):
+                file.write(f'{n+1}: {v}\n')
+            file.write(f'\n Current of each phase all across the network: \n')
+            file.write('From bus -> To bus: I(a, b, c) kA \n')
+            for L in self.lines:
+                i = self.buses.index(L.from_bus)
+                j = self.buses.index(L.to_bus)
+                file.write(f'{i+1} -> {j+1}: {Iabc_ckt[:, i, j]}\n')
 
 def main() -> System:
     """System data and objects.
@@ -807,3 +927,6 @@ def sys_012(sys: System) -> System:
 if __name__ == '__main__':
     sys = main()                 # Get system
     sys012 = sys_012(sys=sys)    # Y matrix of each sequence
+    BF = sys012.balanced(7, Zf=10)
+    BF = sys012.I_ckt(BF)              # Current through the circuit
+    sys012.show_results(BF)            # In pu, kA, kV
