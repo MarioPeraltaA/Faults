@@ -8,9 +8,10 @@ the following kind of faults:
     3. Double Line-to-Ground
     4. Three-Phase fault.
 
-Author: Mario R. Peralta A.
-Electric Power and Energy Research Laboratory (EPERLab).
+Author: Francisco Escobar Prado.
+Collaborator Mario R. Peralta A.
 
+Electric Power and Energy Research Laboratory (EPERLab).
 """
 import numpy as np
 
@@ -927,6 +928,6 @@ def sys_012(sys: System) -> System:
 if __name__ == '__main__':
     sys = main()                 # Get system
     sys012 = sys_012(sys=sys)    # Y matrix of each sequence
-    BF = sys012.balanced(7, Zf=10)
+    BF = sys012.double_to_ground(7, Zf=10)
     BF = sys012.I_ckt(BF)              # Current through the circuit
     sys012.show_results(BF)            # In pu, kA, kV
